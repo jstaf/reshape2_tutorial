@@ -1,0 +1,235 @@
+---
+title: "rehape2"
+author: "Jeff Stafford"
+date: "November 4, 2015"
+output: html_document
+---
+
+`reshape2` "reshapes" your data into different formats/shapes. What does this 
+even mean? Unfortunately, you kind of have to see this in action before it 
+makes sense. We are also going to go over some other data handling tricks
+while we do this.
+
+So let's start with an example dataset that we don't like. I got this from
+RStudio's EDAWR workshop with the following code:
+```{r create data, eval=FALSE}
+devtools::install_github("rstudio/EDAWR")
+data("nutrition")
+write.csv(nutrition, file = "nutrition.csv", row.names = FALSE)
+```
+
+Okay, let's import the data from .csv and take a look at it.
+```{r open data}
+nutrition <- read.csv("nutrition.csv", as.is = TRUE)
+str(nutrition)
+```
+
+Lovely. A giant table with NA values, long strings and other goodies. 
+
+Let's set a couple of data analysis goals for ourselves...
++ What is the unhealthiest thing we can find? 
++ How can we get ALL of the data for chicken, beef, lamb, and pork products and aggregate them into meat-specific categories?
++ What is the most superior meat?
+
+These are all important questions. Let's start with a few clever data handling tricks.
+
+## Logical Indexing
+
+What's logical indexing and why do we care?
+
+This is indexing:
+```{r}
+vector <- c(1, 4, 5, 6, 10)
+# Grab element number 2:
+vector[2]
+# Elements 2:4
+vector[2:4]
+```
+
+This is logical indexing. All we're doing is using true and false values instead of numbers.
+```{r}
+vector <= 5
+vector[vector <= 5]
+```
+
+Logical indexing is pretty useful, but there's a major issue you need to be aware of. What happens if there are NAs in our dataset?
+```{r removing NAs}
+newData <- c(1, 12, 4, NA, NA, 5)
+newData > 4
+newData[newData > 4]
+
+# NAs will mess you up! Let's get rid of them with the is.na() function
+is.na(newData)
+newData[!is.na(newData)]
+```
+
+Note that we can also replace values using logical indexing, which is sometimes more useful than just getting rid of them. 
+```{r replacing values}
+# Here is our original data
+newData
+
+# Replace the values we want
+newData[is.na(newData)] <- 999
+newData
+```
+
+Quick test: What is the unhealthiest food (most calories) in our "nutrition" dataset. 
+
+Hints:  
+
+* The calories column has the number of calories for each food.  
+* You will need to remove rows with NA values for calories from your dataset.  
+* You can calculate the maximum value of a vector using `max()`.  
+
+### Logical indexing on strings
+
+We can also use this trick on strings!
+
+There's like 27 million entries for beef. How do we get all of the beef entries but nothing else? (Wheres the beef? ... Okay, I'll stop now.)
+```{r WHERES THE BEEF}
+# this function finds strings inside other strings, note that it is case-sensitive
+booleans <- grepl("Beef", nutrition$food)
+# output is true or false (whether or not beef was found)
+head(booleans)
+# grepl() returns true/false, grep() returns the position of matches
+rowNumbers <- grep("Beef", nutrition$food)
+head(rowNumbers)
+
+# Another neat trick... logical indexing. If you feed R a collection of true/false values, it returns only the rows/columns for which the corresponding value is true
+beef <- nutrition[booleans,]
+# All of the rows where "Beef" was found (note that we got stuff like soup, which we'll need to filter out):
+head(beef) 
+
+# Note that using row numbers gives exactly the same output
+all(nutrition[booleans, 1] == nutrition[rowNumbers, 1])
+# As before, you can stuff entire expressions inside the square brackets...
+head(nutrition[grepl("Beef", nutrition$food), ])
+```
+
+Quick test- how would we find all of the entries with chicken in them?
+
+The `stringr` library makes working with strings easier. Let's use it to take only the entries that begin with "Beef".
+
+```{r}
+library(stringr)
+# str_detect() is literally grepl() with the arguments reversed
+sameAsGrepl <- nutrition$food[str_detect(nutrition$food, "Beef")]
+head(sameAsGrepl)
+
+# str_locate finds the location of each match's start and end.
+loc <- str_locate(nutrition$food, "Beef")
+head(loc)
+#take only 1st column, which is the start
+loc <- loc[, 1] 
+# replace all of the NAs with something else
+loc[is.na(loc)] <- 999 
+# take only elements where beef is found beginning at the 1st letter
+beef <- nutrition[loc == 1, ] 
+```
+
+Can you write a function using `str_locate()` and use it to find all of the elements that begin with "Chicken"?
+
+Hint: if you're unfamiliar with how functions look in R, here is a refresher...
+```{r}
+example <- function(a, b) {
+  # put whatever code you want in here
+  answer <- a + b
+  return(answer)
+}
+```
+
+Let's use the function we just wrote to retrieve all of the entries for Pork, Chicken, Lamb, and Beef. I added a small modification so that it appends a column with the food type for each thing we search through. This will make our life a bit easier when doing stuff with `reshape2` in the next section. 
+
+```{r}
+foodFinder <- function(foodType) {
+  loc <- str_locate(nutrition$food, foodType)
+  #take only 1st column, which is the start
+  loc <- loc[, 1] 
+  # replace all of the NAs with something else
+  loc[is.na(loc)] <- 999 
+  # take only elements where beef is found beginning at the 1st letter
+  ans <- nutrition[loc == 1, ]
+  # add the food type name
+  ans$type <- foodType
+  return(ans)
+}
+
+# lapply(x, fun) runs function "fun" on every element of x and returns results as a list
+meat <- lapply(c("Beef", "Chicken", "Lamb", "Pork"), foodFinder)
+# to un-list something... 
+meat <- do.call(rbind, meat)
+# check our work
+unique(meat$type)
+```
+
+## Using `reshape2` to condense and reformat data
+
+`reshape2` is a data aggregation/reformatting tool. It pairs really nicely with R's stats functions, `ggplot2`, and `plyr`/`dplyr`. We are going to apply it on a small example before using it on our dataset full of meat. 
+
+Let's make up some example data first. (don't judge me...)
+```{r}
+species <- c("llama", "alpaca", "lacuna", "manatee", "velociraptor")
+fuzziness <- c(5, 4, 7, 0, -6)
+landSpeed <- c(50, 34, 22, 0, 60)
+iq <- c(46, 35, 38, 7, 96)
+caloriesPerServing <- c(200, 326, 122, 1022, NA)
+llamas <- data.frame(species, fuzziness, landSpeed, iq, caloriesPerServing)
+llamas
+```
+
+So now we have an data table representing several different types of llamas. The format it is in is called "wide" data. That doesn't make much sense without seeing "long" data first. 
+
+We can make long data using the `melt()` function. 
+
+...Go on, melt those llamas.
+```{r}
+library(reshape2)
+melt(llamas)
+
+# What happens if we have multiple identifier variables?
+llamas$type <- c("llama", "llama", "llama", "water llama", "ancient llama")
+# it automatically uses strings/categorical variables as ID variables 
+melt(llamas)
+
+# You can manually specify which variables get used as ID variables like this:
+melted_llamas <- melt(llamas, id.vars = c("species", "type"))
+melted_llamas
+```
+
+So now that we've made long format data, why don't we try turning it back into wide-format? For that, we will use the `dcast()` function. There is also an `acast()` function which works in an identical manner to `dcast()` but outputs an array instead of a dataframe. If you don't know (or care) what an array is, just always use the `dcast()` function.
+
+So, let's make some wide llamas. 
+
+`dcast()` syntax: dcast(melted_data, idVariable1 + idVariable2 ~ columnNames)
+
+```{r}
+# Note we are using the headers from melted_llamas here
+colnames(melted_llamas)
+dcast(melted_llamas, species + type ~ variable)
+```
+
+Now we are back to our original dataset! What happens if we leave out an ID variable like species?
+
+```{r}
+dcast(melted_llamas, type ~ variable)
+```
+
+`dcast()` will attempt to condense data if there isn't a unique ID value for every element. The default function it will use to do this is `length()`, where it simply counts the number of values in each category. We can use other functions if we specify which ones!
+
+```{r}
+dcast(melted_llamas, type ~ variable, fun.aggregate = mean)
+
+#na.rm gets rid of NA values before a calulation
+dcast(melted_llamas, type ~ variable, fun.aggregate = mean, na.rm = TRUE)
+```
+
+Okay, now for our ultimate test. Using our dataset from earlier, can you guys calculate the mean values for each type of meat? Our data from before is saved as the variable `meat` and the `meat$type` variable breaks it down by category.
+
+I am interested in the following variables (calculate them all in one go!): calories, protein, carbohydrates, total_fat, cholesterol, fiber, iron, sodium. 
+
+Hint: Running the following line as your first step will separate out the variables we want. The `%in%` operator returns true if an element in on the left side is found on the right side.
+```{r}
+meat <- meat[, colnames(meat) %in% c("calories", "protein", "carbohydrates", "total_fat", "cholesterol", "fiber", "iron", "sodium", "type")]
+```
+
+Now can you turn it back into long data? Bonus points if you make a graph. 
